@@ -38,6 +38,7 @@
 #![warn(clippy::all)]
 #![warn(clippy::cargo)]
 use std::{
+    alloc::Layout,
     error, fmt,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -86,7 +87,7 @@ pub trait AllocationTracker {
     /// bounded channels, as well as intermediate structures that can be allocated entirely on the
     /// stack.  This will ensure that no allocations are required in this method, while still
     /// allowing code to be written that isn't unnecessarily restrictive.
-    fn allocated(&self, addr: usize, size: usize, group_id: AllocationGroupId);
+    fn allocated(&self, addr: usize, layout: Layout, allocating_group_id: AllocationGroupId);
 
     /// Tracks when a deallocation has occurred.
     ///
@@ -102,7 +103,13 @@ pub trait AllocationTracker {
     /// bounded channels, as well as intermediate structures that can be allocated entirely on the
     /// stack.  This will ensure that no allocations are required in this method, while still
     /// allowing code to be written that isn't unnecessarily restrictive.
-    fn deallocated(&self, addr: usize, current_group_id: AllocationGroupId);
+    fn deallocated(
+        &self,
+        addr: usize,
+        layout: Layout,
+        allocating_group_id: AllocationGroupId,
+        deallocating_group_id: AllocationGroupId,
+    );
 }
 
 struct Tracker {
@@ -120,13 +127,20 @@ impl Tracker {
     }
 
     /// Tracks when an allocation has occurred.
-    fn allocated(&self, addr: usize, size: usize, group_id: AllocationGroupId) {
-        self.tracker.allocated(addr, size, group_id)
+    fn allocated(&self, addr: usize, layout: Layout, allocating_group_id: AllocationGroupId) {
+        self.tracker.allocated(addr, layout, allocating_group_id)
     }
 
     /// Tracks when a deallocation has occurred.
-    fn deallocated(&self, addr: usize, group_id: AllocationGroupId) {
-        self.tracker.deallocated(addr, group_id)
+    fn deallocated(
+        &self,
+        addr: usize,
+        layout: Layout,
+        allocating_group_id: AllocationGroupId,
+        deallocating_group_id: AllocationGroupId,
+    ) {
+        self.tracker
+            .deallocated(addr, layout, allocating_group_id, deallocating_group_id)
     }
 }
 

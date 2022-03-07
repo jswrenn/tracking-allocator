@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     mem,
+    num::NonZeroUsize,
     sync::atomic::{AtomicUsize, Ordering},
 };
 
@@ -11,31 +12,37 @@ thread_local! {
     ///
     /// Any allocations which occur on this thread will be associated with whichever token is
     /// present at the time of the allocation.
-    static CURRENT_ALLOCATION_TOKEN: RefCell<Option<AllocationGroupId>> = RefCell::new(None);
+    pub (crate) static CURRENT_ALLOCATION_TOKEN: RefCell<Option<AllocationGroupId>> = 
+        RefCell::new(Some(AllocationGroupId::ROOT));
 }
-
-static GROUP_ID: AtomicUsize = AtomicUsize::new(1);
-static HIGHEST_GROUP_ID: AtomicUsize = AtomicUsize::new(1);
 
 /// The identifier that uniquely identifiers an allocation group.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct AllocationGroupId(usize);
+#[repr(transparent)]
+pub struct AllocationGroupId(NonZeroUsize);
 
 impl AllocationGroupId {
-    /// Gets the group ID used for allocations which are not made within a registered allocation group.
-    pub const fn root() -> AllocationGroupId {
-        AllocationGroupId(0)
+    /// The group ID used for allocations which are not made within a registered allocation group.
+    pub const ROOT: Self = Self(unsafe { NonZeroUsize::new_unchecked(1) });
+
+    const fn as_usize(&self) -> usize {
+        Self::ROOT.0.get()
     }
-}
 
-fn register_group_id() -> Option<AllocationGroupId> {
-    let group_id = GROUP_ID.fetch_add(1, Ordering::Relaxed);
-    let highest_group_id = HIGHEST_GROUP_ID.fetch_max(group_id, Ordering::AcqRel);
+    fn next() -> Option<AllocationGroupId> {
+        static GROUP_ID: AtomicUsize = AtomicUsize::new(AllocationGroupId::ROOT.as_usize() + 1);
+        static HIGHEST_GROUP_ID: AtomicUsize =
+            AtomicUsize::new(AllocationGroupId::ROOT.as_usize() + 1);
 
-    if group_id >= highest_group_id {
-        Some(AllocationGroupId(group_id))
-    } else {
-        None
+        let group_id = GROUP_ID.fetch_add(1, Ordering::Relaxed);
+        let highest_group_id = HIGHEST_GROUP_ID.fetch_max(group_id, Ordering::AcqRel);
+
+        if group_id >= highest_group_id {
+            let group_id = NonZeroUsize::new(group_id).expect("bug: group_id overflowed");
+            Some(AllocationGroupId(group_id))
+        } else {
+            None
+        }
     }
 }
 
@@ -76,7 +83,7 @@ impl AllocationGroupToken {
     ///
     /// Otherwise, `Some(token)` is returned.
     pub fn register() -> Option<AllocationGroupToken> {
-        register_group_id().map(AllocationGroupToken)
+        AllocationGroupId::next().map(AllocationGroupToken)
     }
 
     /// The ID associated with this allocation group.
